@@ -6,7 +6,44 @@ const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
 
 exports.googleLogin = async (req, res) => {
   try {
-    const { token } = req.body;
+    const { token, captchaToken } = req.body;
+
+    // 1. Check CAPTCHA token
+    if (!captchaToken) {
+      return res.status(400).json({
+        message: "Please complete CAPTCHA verification",
+      });
+    }
+
+    // 2. Verify CAPTCHA with Google
+    const captchaResponse = await fetch(
+      "https://www.google.com/recaptcha/api/siteverify",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: new URLSearchParams({
+          secret: process.env.RECAPTCHA_SECRET_KEY,
+          response: captchaToken,
+        }),
+      }
+    );
+
+    const captchaData = await captchaResponse.json();
+
+    if (!captchaData.success) {
+      return res.status(401).json({
+        message: "CAPTCHA verification failed",
+      });
+    }
+
+    // 3. Verify Google ID token
+    if (!token) {
+      return res.status(400).json({
+        message: "Google token is required",
+      });
+    }
 
     const ticket = await client.verifyIdToken({
       idToken: token,
@@ -23,6 +60,7 @@ exports.googleLogin = async (req, res) => {
       });
     }
 
+    // 4. Find or create user
     let user = await User.findOne({ email });
 
     if (!user) {
@@ -38,17 +76,20 @@ exports.googleLogin = async (req, res) => {
       await user.save();
     }
 
+    // 5. Generate JWT
     const authToken = jwt.sign({ id: user._id }, process.env.JWT_SECRET, {
       expiresIn: "1d",
     });
 
-    res.status(200).json({
+    return res.status(200).json({
       message: "Google Login Successful",
       token: authToken,
       user,
     });
   } catch (error) {
-    res.status(500).json({
+    console.error("Google Login Error:", error.message);
+
+    return res.status(500).json({
       message: "Google Authentication Failed",
     });
   }
